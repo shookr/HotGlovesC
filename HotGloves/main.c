@@ -6,6 +6,9 @@
  * Version : 0.3
  */ 
 
+#define F_CPU	3686400UL	// also manually defined in delay.h
+#define UART_BAUD_RATE	9600	//115200
+
 #include <stdlib.h>
 #include <avr/io.h>
 #include <avr/interrupt.h>
@@ -17,9 +20,8 @@
 //#include <util/delay.h>
 //#include <time.h>
 
-#define F_CPU	3686400UL	// also manually defined in delay.h
-#define UART_BAUD_RATE	9600	//115200
-#define LCD_PORT	PORTA
+
+#define LCD_PORT	PORTC
 #define NAME_OF_BM	"HotGlove"
 
 #define LEVEL0IN	0b00110000
@@ -36,6 +38,8 @@
 #define LEVEL4OUT	0b11110000
 #define LEVEL5OUT	0b11100000
 
+double dutyCycle = 0;
+int lvl;
 
 void init_led() {
 	DDRC = 0xFF;    // LEDs - output
@@ -52,7 +56,6 @@ void init_lcd() {
 
 void init_uart() {
 	uart_init( UART_BAUD_SELECT(UART_BAUD_RATE,F_CPU) );
-	sei();
 }
 
 void init_bluetooth(){
@@ -66,8 +69,20 @@ void init_bluetooth(){
 	uart_puts_P("R,1\r");
 }
 
-// I don't think this works at all - however it seems needless anyway
-// I think it's because of the '&' which wouldn't work used on a param instad of he original received value
+void init_ADC() {
+	ADMUX |= (1<<REFS0) | (1<<MUX0);
+	ADCSRA |= (1<<ADEN) | (1<<ADSC) | (1<<ADATE) | (1<<ADIF) | (1<<ADIE) | (1<<ADPS2) |  (1<<ADPS1);
+}
+
+void init_PWM() {
+	DDRB = 0xFF; // output
+	TCCR0A = (1<<COM0A1) | (1<<WGM00) | (1<<WGM01);
+	TIMSK0 = (1<<TOIE0);
+	OCR0A = (dutyCycle/100) * 255.0;
+}
+
+// I don't think this works at all - however it seems to be needless anyway
+// I think it's because of the '&' which wouldn't work used on a param instead of the original received value
 bool isReceivedValueValid(unsigned int receivedValue) {
 	char errorMsg[20];
 	bool error = false;
@@ -92,51 +107,44 @@ bool isReceivedValueValid(unsigned int receivedValue) {
 	return true;
 }
 
-void outputNewValue(unsigned char value) {
-	//output on LCD
-	char asciiNumberOfReceivedValue[3];
-	itoa( value , asciiNumberOfReceivedValue, 10);
-	lcd_clrscr();
-	lcd_puts("Received: ");
-	lcd_puts(asciiNumberOfReceivedValue);
-	
-	// output on LED
-	//PORTC = value;
-	
-	// output on UART
-	uart_putc(value);
+void outputADC() {	
+	lcd_gotoxy(0,0);
+	lcd_puts("ADC ");
+	char value[16];
+	itoa( ADC , value, 10);
+	lcd_puts(value);
 }
 
 void setLevel(char value) {
-	lcd_gotoxy(0,1);
-	lcd_puts("Level ");
-	lcd_gotoxy(11,1);
+ 	lcd_gotoxy(0,1);
+ 	lcd_puts("Level ");
+ 	lcd_gotoxy(6,1);
 	char* level;
 	
 	switch (value) {
 		case LEVEL0IN:
-			PORTC = LEVEL0OUT;
 			level = "0";
+			lvl = 0;
 			break;
 		case LEVEL1IN:
-			PORTC = LEVEL1OUT;
 			level = "1";
+			lvl = 1;
 			break;
 		case LEVEL2IN:
-			PORTC = LEVEL2OUT;
 			level = "2";
+			lvl = 2;
 			break;
 		case LEVEL3IN:
-			PORTC = LEVEL3OUT;
 			level = "3";
+			lvl = 3;
 			break;
 		case LEVEL4IN:
-			PORTC = LEVEL4OUT;
 			level = "4";
+			lvl = 4;
 			break;
 		case LEVEL5IN:
-			PORTC = LEVEL5OUT;
 			level = "5";
+			lvl = 5;
 			break;
 		default:
 			return;
@@ -145,12 +153,41 @@ void setLevel(char value) {
 	uart_puts(level);
 }
 
+void debugInput(){
+	if(!(PINA & _BV(PINA2))) {
+		setLevel(0b00110000);
+	}
+	if(!(PINA & _BV(PINA3))) {
+		setLevel(0b00110001);
+	}
+	if(!(PINA & _BV(PINA4))) {
+		setLevel(0b00110010);
+	}
+	if(!(PINA & _BV(PINA5))) {
+		setLevel(0b00110011);
+	}
+	if(!(PINA & _BV(PINA6))) {
+		setLevel(0b00110100);
+	}
+	if(!(PINA & _BV(PINA7))) {
+		setLevel(0b00110101);
+	}
+}
+
 int main(void)
 {
-	init_led();
+	DDRA = 0x00; // quickinput for debugging
+	//init_led();
 	init_lcd();
 	init_uart();
 	init_bluetooth();
+	init_PWM();
+	init_ADC();
+		
+	TCCR0B =  (1<<CS00); //| (1<<CS01) ;//(1<<CS02); //starts timer?
+	sei(); // set external interrupts
+		
+	OCR0A = 128;
 	
 	unsigned int receivedValue;
 	unsigned char value = 0b11111111;
@@ -168,11 +205,23 @@ int main(void)
 			// is the new input a new value?
 			if (value != (unsigned char) receivedValue) {
 				value = (unsigned char) receivedValue;
-				outputNewValue(value);
 				setLevel(value);
 			}
 		}
+		
+		debugInput();
+		
+		OCR0A = lvl * 51;	
+		
+		outputADC();
     }
 }
 
+ISR (TIMER0_OVF_vect) {
+ 		
+}
+
+ISR (ADC_vect) {
+ 
+}
 
